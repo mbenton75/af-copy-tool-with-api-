@@ -1,47 +1,26 @@
 // netlify/functions/catalog.js
-// ESM version (works with `"type": "module"`)
-// Uses Node 18+/20+ built-in fetch — no node-fetch import needed
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+export async function handler() {
+  const storeRaw = process.env.SHOPIFY_STORE || '';
+  const store = storeRaw.replace(/^https?:\/\//, '').replace(/\/+$/, ''); // ensure clean host
+  const token = process.env.SHOPIFY_ADMIN_TOKEN;
 
-export const handler = async (event) => {
-  // CORS preflight
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 204, headers: CORS_HEADERS, body: '' };
-  }
-
-  if (event.httpMethod !== 'GET') {
+  if (!store || !token) {
     return {
-      statusCode: 405,
-      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Method Not Allowed' }),
+      statusCode: 500,
+      body: JSON.stringify({
+        error: 'Missing configuration',
+        detail: {
+          hasStore: !!store,
+          hasToken: !!token,
+        },
+      }),
     };
   }
 
+  const url = `https://${store}/admin/api/2024-04/products.json?limit=5`; // small test
   try {
-    const store = process.env.SHOPIFY_STORE;
-    const token = process.env.SHOPIFY_ADMIN_TOKEN;
-
-    if (!store || !token) {
-      return {
-        statusCode: 500,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          error:
-            'Missing required environment variables: SHOPIFY_STORE and/or SHOPIFY_ADMIN_TOKEN.',
-        }),
-      };
-    }
-
-    // Adjust API version or fields as you like
-    const apiVersion = '2024-04';
-    const url = `https://${store}.myshopify.com/admin/api/${apiVersion}/products.json?limit=250&fields=id,title,handle,body_html,variants,images`;
-
-    const resp = await fetch(url, {
+    const res = await fetch(url, {
       method: 'GET',
       headers: {
         'X-Shopify-Access-Token': token,
@@ -49,38 +28,37 @@ export const handler = async (event) => {
       },
     });
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
+    // If Shopify responds but with an error (401/403/etc), show it
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
       return {
-        statusCode: resp.status,
-        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        statusCode: res.status,
         body: JSON.stringify({
-          error: 'Shopify request failed',
-          status: resp.status,
-          detail: text,
+          error: 'Shopify responded with an error',
+          status: res.status,
+          statusText: res.statusText,
+          url,
+          body: text,
         }),
       };
     }
 
-    const data = await resp.json();
-
+    const data = await res.json();
     return {
       statusCode: 200,
-      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ok: true,
-        count: Array.isArray(data?.products) ? data.products.length : 0,
-        products: data?.products ?? [],
-      }),
+      body: JSON.stringify({ count: data?.products?.length ?? 0, products: data?.products ?? [] }),
     };
   } catch (err) {
     return {
       statusCode: 500,
-      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         error: 'Unexpected error',
-        detail: err instanceof Error ? err.message : String(err),
+        message: err?.message,
+        code: err?.code,
+        cause: err?.cause?.code,
+        url,
+        store,
       }),
     };
   }
-};
+}
