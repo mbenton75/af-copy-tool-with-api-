@@ -1,54 +1,86 @@
 // netlify/functions/catalog.js
-const fetch = global.fetch || ((...args) => import('node-fetch').then(m => m.default(...args)));
+// ESM version (works with `"type": "module"`)
+// Uses Node 18+/20+ built-in fetch — no node-fetch import needed
 
-exports.handler = async (event) => {
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export const handler = async (event) => {
+  // CORS preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers: CORS_HEADERS, body: '' };
+  }
+
+  if (event.httpMethod !== 'GET') {
+    return {
+      statusCode: 405,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'Method Not Allowed' }),
+    };
+  }
+
   try {
-    const { SHOPIFY_STORE, SHOPIFY_ADMIN_TOKEN } = process.env;
+    const store = process.env.SHOPIFY_STORE;
+    const token = process.env.SHOPIFY_ADMIN_TOKEN;
 
-    if (!SHOPIFY_STORE || !SHOPIFY_ADMIN_TOKEN) {
+    if (!store || !token) {
       return {
         statusCode: 500,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ error: 'Missing SHOPIFY_STORE or SHOPIFY_ADMIN_TOKEN env var' })
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error:
+            'Missing required environment variables: SHOPIFY_STORE and/or SHOPIFY_ADMIN_TOKEN.',
+        }),
       };
     }
 
-    const url =
-      `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2024-07/products.json` +
-      `?limit=50&fields=id,title,body_html,handle,variants,images`;
+    // Adjust API version or fields as you like
+    const apiVersion = '2024-04';
+    const url = `https://${store}.myshopify.com/admin/api/${apiVersion}/products.json?limit=250&fields=id,title,handle,body_html,variants,images`;
 
-    const res = await fetch(url, {
+    const resp = await fetch(url, {
+      method: 'GET',
       headers: {
-        'X-Shopify-Access-Token': SHOPIFY_ADMIN_TOKEN,
+        'X-Shopify-Access-Token': token,
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
+      },
     });
 
-    if (!res.ok) {
-      const text = await res.text();
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
       return {
-        statusCode: res.status,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ error: 'Shopify API error', status: res.status, body: text })
+        statusCode: resp.status,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: 'Shopify request failed',
+          status: resp.status,
+          detail: text,
+        }),
       };
     }
 
-    const data = await res.json();
+    const data = await resp.json();
 
     return {
       statusCode: 200,
-      headers: {
-        'content-type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      },
-      body: JSON.stringify(data)
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ok: true,
+        count: Array.isArray(data?.products) ? data.products.length : 0,
+        products: data?.products ?? [],
+      }),
     };
   } catch (err) {
     return {
       statusCode: 500,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ error: 'Function crash', message: String(err) })
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error: 'Unexpected error',
+        detail: err instanceof Error ? err.message : String(err),
+      }),
     };
   }
 };
