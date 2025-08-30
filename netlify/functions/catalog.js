@@ -1,86 +1,54 @@
-exports.handler = async function(event, context) {
-  const headers = {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-  }
+// netlify/functions/catalog.js
+const fetch = global.fetch || ((...args) => import('node-fetch').then(m => m.default(...args)));
 
-  // Preflight for CORS
-  if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 204,
-      headers: {
-        ...headers,
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      },
-      body: ''
-    }
-  }
-
-  const STORE = process.env.SHOPIFY_STORE || ''
-  const TOKEN = process.env.SHOPIFY_ADMIN_TOKEN || ''
-  const version = '2024-07' // adjust if needed
-
-  // Fallback sample data if env not set
-  if (!STORE || !TOKEN) {
-    const sample = {
-      items: [
-        {
-          id: 'gid://shopify/Product/111',
-          productNumber: 1,
-          brand: 'Bella + Canvas',
-          model: '3001U',
-          title: 'Standard Unisex Tee — Bella + Canvas 3001U',
-          price: 34.50,
-          organic: false,
-          description: 'A go-to tee with a soft hand and classic fit.\n- 100% Airlume combed and ring-spun cotton\n- Midweight feel\n- Side-seamed, shoulder taping'
-        },
-        {
-          id: 'gid://shopify/Product/222',
-          productNumber: 4,
-          brand: 'Stanley/Stella',
-          model: 'STTU169',
-          title: 'Unisex Organic Cotton T-Shirt — Stanley/Stella STTU169',
-          price: 42.50,
-          organic: true,
-          description: 'Certified organic cotton with a premium handfeel.\n- 100% organic ring-spun cotton\n- Medium weight\n- Clean, modern fit'
-        }
-      ]
-    }
-    return { statusCode: 200, headers, body: JSON.stringify(sample, null, 2) }
-  }
-
+exports.handler = async (event) => {
   try {
-    const url = `https://${STORE}.myshopify.com/admin/api/${version}/products.json?limit=100&status=active&fields=id,title,handle,vendor,product_type,tags,variants,options`
+    const { SHOPIFY_STORE, SHOPIFY_ADMIN_TOKEN } = process.env;
+
+    if (!SHOPIFY_STORE || !SHOPIFY_ADMIN_TOKEN) {
+      return {
+        statusCode: 500,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ error: 'Missing SHOPIFY_STORE or SHOPIFY_ADMIN_TOKEN env var' })
+      };
+    }
+
+    const url =
+      `https://${SHOPIFY_STORE}.myshopify.com/admin/api/2024-07/products.json` +
+      `?limit=50&fields=id,title,body_html,handle,variants,images`;
+
     const res = await fetch(url, {
       headers: {
-        'X-Shopify-Access-Token': TOKEN,
-        'Content-Type': 'application/json'
+        'X-Shopify-Access-Token': SHOPIFY_ADMIN_TOKEN,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
       }
-    })
-    if (!res.ok) {
-      const text = await res.text()
-      return { statusCode: res.status, headers, body: JSON.stringify({ error: 'Shopify error', detail: text }) }
-    }
-    const data = await res.json()
-    const items = (data.products || []).map(p => {
-      const firstVariant = (p.variants && p.variants[0]) || {}
-      // Derive fields for the copy tool
-      const organic = (p.tags || '').toLowerCase().split(',').map(t => t.trim()).includes('organic')
-      return {
-        id: String(p.id),
-        productNumber: null, // fill later if you have a mapping
-        brand: p.vendor || '',
-        model: '',
-        title: p.title || '',
-        price: firstVariant.price ? Number(firstVariant.price) : null,
-        organic,
-        description: (firstVariant?.title && firstVariant.title !== 'Default Title') ? `${p.title} — ${firstVariant.title}` : p.title,
-        tags: (p.tags || '').split(',').map(t => t.trim()).filter(Boolean)
-      }
-    })
+    });
 
-    return { statusCode: 200, headers, body: JSON.stringify({ items }, null, 2) }
-  } catch (e):
-    return { statusCode: 500, headers, body: JSON.stringify({ error: 'Server error', detail: String(e) }) }
-}
+    if (!res.ok) {
+      const text = await res.text();
+      return {
+        statusCode: res.status,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ error: 'Shopify API error', status: res.status, body: text })
+      };
+    }
+
+    const data = await res.json();
+
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      },
+      body: JSON.stringify(data)
+    };
+  } catch (err) {
+    return {
+      statusCode: 500,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ error: 'Function crash', message: String(err) })
+    };
+  }
+};
